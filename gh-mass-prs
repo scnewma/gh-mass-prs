@@ -1,35 +1,43 @@
 #!/usr/bin/env bash
 set -e
 
-echo "Hello gh-mass-prs!"
+export GH_FORCE_TTY="y"
 
-# Snippets to help get started:
+if [ $# -lt 2 ]; then
+    echo "No search parameters given. This uses the syntax of the 'gh search prs' command."
+    echo "Example:"
+    echo "  gh mass-prs --state=open --review-requested=@me"
+    exit 1
+fi
 
-# Determine if an executable is in the PATH
-# if ! type -p ruby >/dev/null; then
-#   echo "Ruby not found on the system" >&2
-#   exit 1
-# fi
+pr_list_template='{{range . -}}
+{{- $color := "green" -}}
+{{- if (and (eq .state "OPEN") .isDraft) -}}
+{{- $color = "gray" -}}
+{{- else if (eq .state "MERGED") -}}
+{{- $color = "magenta" -}}
+{{- else if (eq .state "CLOSED") -}}
+{{- $color = "red" -}}
+{{- end -}}
+{{- tablerow .repository.name (printf "#%v" .number | color $color) .author.login .title .url}}
+{{- end}}'
+base_command="gh search prs --json number,repository,author,title,state,isDraft,url --template '${pr_list_template}' $*"
 
-# Pass arguments through to another command
-# gh issue list "$@" -R cli/cli
+cmd_approve="gh pr review --approve {-1}"
+cmd_merge="gh pr merge --auto --merge {-1}"
+cmd_approve_and_merge="${cmd_approve} && ${cmd_merge}"
 
-# Using the gh api command to retrieve and format information
-# QUERY='
-#   query($endCursor: String) {
-#     viewer {
-#       repositories(first: 100, after: $endCursor) {
-#         nodes {
-#           nameWithOwner
-#           stargazerCount
-#         }
-#       }
-#     }
-#   }
-# '
-# TEMPLATE='
-#   {{- range $repo := .data.viewer.repositories.nodes -}}
-#     {{- printf "name: %s - stargazers: %v\n" $repo.nameWithOwner $repo.stargazerCount -}}
-#   {{- end -}}
-# '
-# exec gh api graphql -f query="${QUERY}" --paginate --template="${TEMPLATE}"
+# --with-nth=..-2 drops the URL field from the list view, we have it in the
+# item so that the commands can reference it
+eval "${base_command}" \
+    | fzf \
+        --ansi \
+        --with-nth='..-2' \
+        --preview-window='up' \
+        --preview='gh pr view {-1}' \
+        --header='Actions: (ctrl-a:approve) (ctrl-g:merge) (ctrl-e:approve-and-merge)' \
+        --bind="ctrl-a:execute(${cmd_approve})+reload(${base_command})" \
+        --bind="ctrl-g:execute(${cmd_merge})+reload(${base_command})" \
+        --bind="ctrl-e:execute(${cmd_approve_and_merge})+reload(${base_command})"
+
+unset GH_FORCE_TTY
